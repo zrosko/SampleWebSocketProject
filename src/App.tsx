@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Client } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
-import { Send, Wifi, WifiOff, Radio } from 'lucide-react';
+import { Send, Wifi, WifiOff, Radio, Rss } from 'lucide-react';
 
 type ConnectionStatus = 'disconnected' | 'connecting' | 'connected';
 
 function App() {
   const [inputText, setInputText] = useState('');
-  const [outputText, setOutputText] = useState('');
+  const [wsOutput, setWsOutput] = useState('');
+  const [sseOutput, setSseOutput] = useState('');
+  const [sseLoading, setSseLoading] = useState(false);
   const [status, setStatus] = useState<ConnectionStatus>('disconnected');
   const [lastSent, setLastSent] = useState('');
   const clientRef = useRef<Client | null>(null);
@@ -21,7 +23,7 @@ function App() {
       onConnect: () => {
         setStatus('connected');
         client.subscribe('/topic/output', (message) => {
-          setOutputText(message.body);
+          setWsOutput(message.body);
         });
       },
       onDisconnect: () => {
@@ -43,7 +45,7 @@ function App() {
     };
   }, [connect]);
 
-  const handleSubmit = () => {
+  const handleWebSocketSend = () => {
     if (!inputText.trim() || status !== 'connected') return;
     clientRef.current?.publish({
       destination: '/app/receiveInput',
@@ -52,8 +54,52 @@ function App() {
     setLastSent(inputText.trim());
   };
 
+  const handleSseSend = async () => {
+    if (!inputText.trim()) return;
+    setSseLoading(true);
+    setSseOutput('');
+    setLastSent(inputText.trim());
+
+    try {
+      const response = await fetch('http://localhost:8080/receiveInput2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(inputText.trim()),
+      });
+
+      if (!response.ok || !response.body) {
+        setSseOutput('Error: could not connect to SSE endpoint');
+        setSseLoading(false);
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            setSseOutput(line.slice(5).trim());
+          }
+        }
+      }
+    } catch {
+      setSseOutput('Error: failed to reach server');
+    } finally {
+      setSseLoading(false);
+    }
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') handleSubmit();
+    if (e.key === 'Enter') handleWebSocketSend();
   };
 
   const statusConfig = {
@@ -73,7 +119,7 @@ function App() {
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-blue-600 shadow-lg shadow-blue-200 mb-4">
             <Radio className="w-7 h-7 text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">WebSocket Demo</h1>
+          <h1 className="text-2xl font-bold text-slate-800 tracking-tight">WebSocket + SSE Demo</h1>
           <p className="text-slate-500 text-sm mt-1">Real-time messaging with Spring Boot</p>
         </div>
 
@@ -110,15 +156,28 @@ function App() {
               />
             </div>
 
-            {/* Submit button */}
-            <button
-              onClick={handleSubmit}
-              disabled={status !== 'connected' || !inputText.trim()}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-sm rounded-xl transition-all duration-150 shadow-sm hover:shadow-md disabled:shadow-none active:scale-[0.98]"
-            >
-              <Send className="w-4 h-4" />
-              Send to Server
-            </button>
+            {/* Buttons row */}
+            <div className="flex gap-3">
+              {/* WebSocket button */}
+              <button
+                onClick={handleWebSocketSend}
+                disabled={status !== 'connected' || !inputText.trim()}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-sm rounded-xl transition-all duration-150 shadow-sm hover:shadow-md disabled:shadow-none active:scale-[0.98]"
+              >
+                <Send className="w-4 h-4 shrink-0" />
+                <span>Send to Server and get WebSocket</span>
+              </button>
+
+              {/* SSE button */}
+              <button
+                onClick={handleSseSend}
+                disabled={!inputText.trim() || sseLoading}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-teal-600 hover:bg-teal-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-semibold text-sm rounded-xl transition-all duration-150 shadow-sm hover:shadow-md disabled:shadow-none active:scale-[0.98]"
+              >
+                <Rss className={`w-4 h-4 shrink-0 ${sseLoading ? 'animate-pulse' : ''}`} />
+                <span>{sseLoading ? 'Waiting...' : 'Send to Server and get SSE'}</span>
+              </button>
+            </div>
 
             {/* Divider */}
             <div className="relative">
@@ -130,22 +189,40 @@ function App() {
               </div>
             </div>
 
-            {/* Output field */}
+            {/* WebSocket output */}
             <div>
               <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-                Server Response
+                WebSocket Response
                 {status === 'connected' && (
                   <span className="ml-2 text-emerald-500 normal-case font-normal">• broadcasting every 5s</span>
                 )}
               </label>
               <div
-                className={`w-full min-h-[72px] px-4 py-3 rounded-xl border text-sm font-mono leading-relaxed transition-all ${
-                  outputText
-                    ? 'border-emerald-200 bg-emerald-50 text-slate-700'
+                className={`w-full min-h-[60px] px-4 py-3 rounded-xl border text-sm font-mono leading-relaxed transition-all ${
+                  wsOutput
+                    ? 'border-blue-200 bg-blue-50 text-slate-700'
                     : 'border-slate-200 bg-slate-50 text-slate-400'
                 }`}
               >
-                {outputText || 'Waiting for server messages...'}
+                {wsOutput || 'Waiting for WebSocket messages...'}
+              </div>
+            </div>
+
+            {/* SSE output */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                SSE Response
+              </label>
+              <div
+                className={`w-full min-h-[60px] px-4 py-3 rounded-xl border text-sm font-mono leading-relaxed transition-all ${
+                  sseOutput
+                    ? 'border-teal-200 bg-teal-50 text-slate-700'
+                    : sseLoading
+                    ? 'border-amber-200 bg-amber-50 text-amber-500'
+                    : 'border-slate-200 bg-slate-50 text-slate-400'
+                }`}
+              >
+                {sseLoading ? 'Waiting for SSE response...' : sseOutput || 'Waiting for SSE messages...'}
               </div>
             </div>
 
