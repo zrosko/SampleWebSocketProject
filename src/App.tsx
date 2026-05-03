@@ -212,6 +212,9 @@ function App() {
             <div>
               <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
                 SSE Response
+                {sseLoading && (
+                  <span className="ml-2 text-teal-500 normal-case font-normal">• broadcasting every 5s</span>
+                )}
               </label>
               <div
                 className={`w-full min-h-[60px] px-4 py-3 rounded-xl border text-sm font-mono leading-relaxed transition-all ${
